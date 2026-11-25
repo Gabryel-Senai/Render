@@ -9,8 +9,20 @@ const SOURCE =
   process.env.SOURCE_URL ||
   "https://stm0.inovativa.net/listen/radiomarinha/radio.mp3";
 
+function log(...args) {
+  console.log(new Date().toISOString(), ...args);
+}
+
 const server = http.createServer((req, res) => {
   const path = req.url.split("?")[0];
+  log(
+    "pedido",
+    req.method,
+    req.url,
+    "HTTP/" + req.httpVersion,
+    "UA=" + (req.headers["user-agent"] || "-"),
+    "icy-metadata=" + (req.headers["icy-metadata"] || "-")
+  );
 
   // Página simples para o Render saber que o serviço está de pé
   if (path === "/" || path === "/health") {
@@ -25,13 +37,21 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Resposta no estilo de rádio: sem "chunked", corpo vai até a conexão fechar.
+  res.useChunkedEncodingByDefault = false;
   res.writeHead(200, {
     "Content-Type": "audio/mpeg",
     "Cache-Control": "no-cache, no-store",
+    "Accept-Ranges": "none",
     "icy-name": "Radio Marinha Natal",
     "icy-br": "128",
-    Connection: "keep-alive",
+    Connection: "close",
   });
+
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
 
   const ffmpeg = spawn(
     "ffmpeg",
@@ -52,14 +72,21 @@ const server = http.createServer((req, res) => {
     ],
     { stdio: ["ignore", "pipe", "pipe"] }
   );
+  log("ffmpeg iniciado");
 
   ffmpeg.stdout.pipe(res);
   ffmpeg.stderr.on("data", (d) => process.stderr.write(d));
 
   const stop = () => ffmpeg.kill("SIGKILL");
-  req.on("close", stop);
+  req.on("close", () => {
+    log("cliente desconectou");
+    stop();
+  });
   res.on("close", stop);
-  ffmpeg.on("exit", () => res.end());
+  ffmpeg.on("exit", (code) => {
+    log("ffmpeg saiu, codigo", code);
+    res.end();
+  });
 });
 
-server.listen(PORT, () => console.log("Ouvindo na porta " + PORT));
+server.listen(PORT, () => log("Ouvindo na porta " + PORT));
